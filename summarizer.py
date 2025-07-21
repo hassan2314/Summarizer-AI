@@ -24,6 +24,16 @@ def generate_bullets_point(dialogue: str):
     except Exception as e:
         return f"Error generating bullets: {str(e)}"
 
+def generate_tags(dialogue: str):
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")  # Use correct model name
+        response = model.generate_content(
+            f"From the following article, generate 3 tags:\n\n{dialogue}"
+        )
+        return response.text
+    except Exception as e:
+        return f"Error generating tags: {str(e)}"
+
 # === Load Models & Tokenizers ===
 summarizer_model_path = "./t5_summarizer_final"
 question_model_path = "./t5_question_gen_model"
@@ -67,6 +77,10 @@ def summarize(request: SummaryRequest):
         prompt = "summarize: "
         model = summarizer_model
         tokenizer = summarizer_tokenizer
+
+    elif request.mode == "tags":
+        tags_result = generate_tags(dialogue)
+        return {"data": tags_result}
 
     elif request.mode == "questions":
         prompt = (
