@@ -4,12 +4,14 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 import torch
 import re
 import google.generativeai as genai
+from dotenv import load_dotenv
 import os
 
 app = FastAPI()
+load_dotenv()
 
 # === Gemini Configuration ===
-GOOGLE_API_KEY = "AIzaSyAojwXjKCD19p9I5ObQfelBS5_ECfzy7Dg"
+GOOGLE_API_KEY = os.getenv("GEMINI_API")
 genai.configure(api_key=GOOGLE_API_KEY)
 
 def generate_bullets_point(dialogue: str):
