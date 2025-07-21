@@ -1,0 +1,34 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# === Virtual Environment ===
+venv/
+ENV/
+env/
+.venv/
+.env
+
+# === IDEs and Editors ===
+.vscode/
+.idea/
+*.swp
+
+# === OS-specific files ===
+.DS_Store
+Thumbs.db
+
+# === Model directories (optional, if models are large or trained locally) ===
+t5_bullet_gen_model/
+t5_question_gen_model/
+t5_summarizer_final/
+
+*.config
+
+# === Logs and temporary files ===
+*.log
+*.tmp
+*.bak
