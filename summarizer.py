@@ -24,6 +24,16 @@ def generate_bullets_point(dialogue: str):
     except Exception as e:
         return f"Error generating bullets: {str(e)}"
 
+def generate_tags(dialogue: str):
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")  # Use correct model name
+        response = model.generate_content(
+            f"From the following article, generate 3 tags:\n\n{dialogue}"
+        )
+        return response.text
+    except Exception as e:
+        return f"Error generating tags: {str(e)}"
+
 # === Load Models & Tokenizers ===
 summarizer_model_path = "./t5_summarizer_final"
 question_model_path = "./t5_question_gen_model"
@@ -47,10 +57,11 @@ class SummaryRequest(BaseModel):
 @app.post("/summarize")
 def summarize(request: SummaryRequest):
     dialogue = request.dialogue.strip()
-
+    tags=generate_tags(dialogue)
+    
     if request.mode == "bullets":
         bullet_result = generate_bullets_point(dialogue)
-        return {"data": bullet_result}
+        return {"data": bullet_result, "tags": tags}
 
     # === Generation Config ===
     gen_config = {
@@ -67,6 +78,7 @@ def summarize(request: SummaryRequest):
         prompt = "summarize: "
         model = summarizer_model
         tokenizer = summarizer_tokenizer
+       
 
     elif request.mode == "questions":
         prompt = (
@@ -76,10 +88,8 @@ def summarize(request: SummaryRequest):
         )
         model = question_model
         tokenizer = question_tokenizer
-    else:
-        prompt = "summarize: "
-        model = summarizer_model
-        tokenizer = summarizer_tokenizer
+
+    
 
     # === Tokenize and Generate ===
     input_text = prompt + dialogue
@@ -94,7 +104,7 @@ def summarize(request: SummaryRequest):
     if request.mode == "questions":
         questions = re.split(r"\n+|\d+\.\s+|•\s*", decoded_output)
         questions = [q.strip() for q in questions if q.strip()]
-        return {"data": questions}
+        return {"data": questions, "tags": tags}
 
     # === Return Paragraph Summary ===
-    return {"data": decoded_output}
+    return {"data": decoded_output, "tags": tags}
