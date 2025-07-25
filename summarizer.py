@@ -26,13 +26,28 @@ def generate_bullets_point(dialogue: str):
 
 def generate_tags(dialogue: str):
     try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(
+            f"From the following article, generate 3 tags (just tags, no explanation):\n\n{dialogue}"
+        )
+        # Remove any unwanted prefix using regex or string manipulation
+        raw_text = response.text.strip()
+
+        # Optional cleanup (if model still returns numbered or prefixed tags)
+        cleaned_tags = re.sub(r"(?i)^here are.*?:", "", raw_text).strip()
+        return cleaned_tags
+    except Exception as e:
+        return f"Error generating tags: {str(e)}"
+
+def generate_questions(dialogue: str):
+    try:
         model = genai.GenerativeModel("gemini-1.5-flash")  # Use correct model name
         response = model.generate_content(
-            f"From the following article, generate 3 tags:\n\n{dialogue}"
+            f"From the following text, generate  3 simple unique questions: \n\n{dialogue}"
         )
         return response.text
     except Exception as e:
-        return f"Error generating tags: {str(e)}"
+        return f"Error generating questions: {str(e)}"
 
 # === Load Models & Tokenizers ===
 summarizer_model_path = "./t5_summarizer_final"
@@ -81,13 +96,8 @@ def summarize(request: SummaryRequest):
        
 
     elif request.mode == "questions":
-        prompt = (
-            "From the following article, generate exactly 3 unique and insightful questions. "
-            "Avoid repeating any information. Do not include any statements. "
-            "Only include well-formed questions:\n\n"
-        )
-        model = question_model
-        tokenizer = question_tokenizer
+        question_result = generate_questions(dialogue)
+        return {"data": question_result, "tags": tags}
 
     
 
