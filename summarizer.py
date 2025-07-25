@@ -32,14 +32,14 @@ def generate_bullets_point(dialogue: str) -> str:
 def generate_tags(dialogue: str) -> List[str]:
     """Generate tags using HF API"""
     try:
-        API_URL = "https://api-inference.huggingface.co/models/fabiochiu/t5-base-tag-generation"
+        API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
         payload = {
             "inputs": f"Generate tags for: {dialogue}",
-            "parameters": {"num_return_sequences": 3}
+            "parameters": {"max_length": 200}
         }
         response = requests.post(API_URL, headers=HEADERS, json=payload)
         response.raise_for_status()
-        return [tag.strip() for tag in response.json()[0]['generated_text'].split(",")]
+        return response.json()[0]['tags'].split(', ')
     except Exception as e:
         return [f"Error generating tags: {str(e)}"]
 
@@ -71,4 +71,46 @@ def summarize(request: SummaryRequest):
         bullet_result = generate_bullets_point(dialogue)
         return {"data": bullet_result, "tags": tags}
 
-    # ... (rest of your existing summarize function remains the same)
+        # === Generation Config ===
+    gen_config = {
+        "max_length": 1024,
+        "num_beams": 9,
+        "repetition_penalty": 2.0,
+        "temperature": 1.5,
+        "early_stopping": True,
+        "no_repeat_ngram_size": 3
+    }
+
+    # === Select Model and Prompt ===
+    if request.mode == "paragraph":
+        prompt = "summarize: "
+        model = summarizer_model
+        tokenizer = summarizer_tokenizer
+       
+
+    elif request.mode == "questions":
+        prompt = (
+            "From the following article, generate exactly 3 unique and insightful questions. "
+            "Avoid repeating any information. Do not include any statements. "
+            "Only include well-formed questions:\n\n"
+        )
+        model = question_model
+        tokenizer = question_tokenizer
+
+     # === Tokenize and Generate ===
+    input_text = prompt + dialogue
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True).to(device)
+
+    with torch.no_grad():
+        outputs = model.generate(**inputs, **gen_config)
+
+    decoded_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # === Post-process Questions ===
+    if request.mode == "questions":
+        questions = re.split(r"\n+|\d+\.\s+|•\s*", decoded_output)
+        questions = [q.strip() for q in questions if q.strip()]
+        return {"data": questions, "tags": tags}
+
+    # === Return Paragraph Summary ===
+    return {"data": decoded_output, "tags": tags}
