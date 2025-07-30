@@ -34,7 +34,7 @@ class SummaryRequest(BaseModel):
     dialogue: str
     mode: str  # "paragraph", "bullets", or "questions"
 
-# === Cached Resources ===
+# === Cached Resources === 
 @lru_cache(maxsize=1)
 def get_summarizer_model():
     model_path = "./t5_summarizer_final"
