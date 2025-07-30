@@ -5,22 +5,36 @@ import torch
 import re
 import httpx
 import os
-from typing import List
-from functools import lru_cache
 from dotenv import load_dotenv
+from typing import List
+import google.generativeai as genai
 
 # === App Setup ===
 app = FastAPI(title="Text Processing API", version="1.0")
 load_dotenv()
 
-# === Config ===
+# === Load API Keys ===
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API = os.getenv("GEMINI_API")
+if not GROQ_API_KEY or not GEMINI_API:
+    raise RuntimeError("Missing GROQ_API_KEY or GEMINI_API")
+
+# === Groq Config ===
 GROQ_MODEL = "llama3-8b-8192"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY not set in .env")
+# === Gemini Config ===
+genai.configure(api_key=GEMINI_API)
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+# gemini_model = genai.GenerativeModel("gemma-3-27b-it")
 
+# === Load Local T5 Models ===
+summarizer_model_path = "./t5_summarizer_final"
+summarizer_tokenizer = T5Tokenizer.from_pretrained(summarizer_model_path)
+summarizer_model = T5ForConditionalGeneration.from_pretrained(summarizer_model_path)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+summarizer_model.to(device)
 
 # === Request Models ===
 class QAItem(BaseModel):
@@ -35,85 +49,29 @@ class SummaryRequest(BaseModel):
     dialogue: str
     mode: str  # "paragraph", "bullets", or "questions"
 
-# === Caching T5 Local Model ===
-@lru_cache(maxsize=1)
-def get_summarizer_model():
-    model_path = "./t5_summarizer_final"
-    tokenizer = T5Tokenizer.from_pretrained(model_path)
-    model = T5ForConditionalGeneration.from_pretrained(model_path)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    return tokenizer, model
-
-# === Groq Helper ===
+# === Groq LLM Call ===
 def get_groq_response(prompt: str) -> str:
-    """Send prompt to Groq LLaMA-3 and return response."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-
     payload = {
         "model": GROQ_MODEL,
         "messages": [
-            {"role": "system", "content": "You are a helpful summarization assistant."},
+            {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7
     }
+    response = httpx.post(GROQ_API_URL, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
 
-    try:
-        response = httpx.post(GROQ_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Groq API error: {str(e)}")
-
-# === Cleaning Utility ===
-def clean_tags(raw_text: str) -> str:
-    return re.sub(r"(?i)^here are.*?:", "", raw_text).strip()
-
-# === Summarization API ===
-@app.post("/summarize", summary="Generate summary in different formats")
-async def summarize(request: SummaryRequest):
-    dialogue = request.dialogue.strip()
-    tags = generate_tags(dialogue)
-
-    if request.mode == "bullets":
-        bullet_result = generate_bullets_point(dialogue)
-        return {"data": bullet_result, "tags": tags}
-
-    if request.mode == "questions":
-        question_result = generate_questions(dialogue)
-        return {"data": question_result, "tags": tags}
-
-    # === Paragraph summary from T5 local ===
-    tokenizer, model = get_summarizer_model()
-    prompt = "summarize: " + dialogue
-
-    gen_config = {
-        "max_length": 1024,
-        "num_beams": 9,
-        "repetition_penalty": 2.0,
-        "temperature": 1.5,
-        "early_stopping": True,
-        "no_repeat_ngram_size": 3
-    }
-
-    inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(**inputs, **gen_config)
-
-    decoded_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return {"data": decoded_output, "tags": tags}
-
-# === Batch QA Evaluation ===
-@app.post("/check-batch", summary="Check correctness of batch answers")
-async def check_batch_answers(request: BatchAnswerCheckRequest):
+# === Gemini Answer Check ===
+@app.post("/check-batch")
+def check_batch_answers(request: BatchAnswerCheckRequest):
     formatted_qas = "\n".join(
-        f"Q{idx+1}: {qa.question}\nA{idx+1}: {qa.user_answer}" 
+        f"Q{idx+1}: {qa.question}\nA{idx+1}: {qa.user_answer}"
         for idx, qa in enumerate(request.qa_pairs)
     )
 
@@ -122,51 +80,78 @@ Given the following context:
 
 {request.context}
 
-Evaluate the user's answers to these questions:
+Evaluate the user's answers strictly. Only return:
+
+Q1: Correct or Incorrect  
+Q2: Correct or Incorrect  
+Q3: Correct or Incorrect
 
 {formatted_qas}
+"""
+    try:
+        response = gemini_model.generate_content(prompt)
+        return {"feedback": response.text.strip()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-Respond in format:
-Q1: Correct or Incorrect 
-Q2: Correct or Incorrect 
-...
-without any introductory line, numbering
-    """
-    feedback = get_groq_response(prompt)
-    return {"feedback": feedback}
+# === Summary Endpoint ===
+@app.post("/summarize")
+def summarize(request: SummaryRequest):
+    dialogue = request.dialogue.strip()
+    tags = generate_tags(dialogue)
 
-# === Groq-Backed Text Generators ===
+    if request.mode == "bullets":
+        return {"data": generate_bullets_point(dialogue), "tags": tags}
+
+    if request.mode == "questions":
+        return {"data": generate_questions(dialogue), "tags": tags}
+
+    # === Paragraph Summary via T5 ===
+    prompt = "summarize: " + dialogue
+    inputs = summarizer_tokenizer(prompt, return_tensors="pt", truncation=True, padding=True).to(device)
+
+    gen_config = {
+        "max_length": 1024,
+        "num_beams": 4,
+        "repetition_penalty": 2.0,
+        "temperature": 1.5,
+        "early_stopping": True,
+        "no_repeat_ngram_size": 3
+    }
+
+    with torch.no_grad():
+        outputs = summarizer_model.generate(**inputs, **gen_config)
+    decoded_output = summarizer_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return {"data": decoded_output, "tags": tags}
+
+# === Groq-based Content Generators ===
 def generate_bullets_point(text: str) -> str:
     prompt = f"""
-From the following article, generate bullet points using only plain lines, without any symbols like *, •, -, or numbers. 
+From the following article, generate bullet points using plain lines only.
 
-Each bullet point should be in a new line, like:
+Example format:
 This is the first point  
 This is the second point  
 
-Only return the plain text bullet points, nothing else.
+Do not use bullets, *, -, or numbers. Just one point per line.
 
 Article:
 {text}
 """
-
     return get_groq_response(prompt)
-
-def generate_tags(text: str) -> str:
-    prompt = f"From this article, generate 3 tags (just tags, no explanation and no numbers):\n\n{text}"
-    raw_text = get_groq_response(prompt)
-    return clean_tags(raw_text)
 
 def generate_questions(text: str) -> str:
     prompt = f"""
-From the following text, generate exactly 3 simple and unique questions.
+From the following text, generate exactly 3 simple, unique questions.
 
-Only return the questions directly without any introductory line, numbering, or bullet points.
-
-Each question should be on a new line.
+Only return the questions directly, no numbers, no bullets.
 
 Text:
 {text}
 """
-
     return get_groq_response(prompt)
+
+def generate_tags(text: str) -> str:
+    prompt = f"Generate 3 tags for this text (no numbers, no explanation):\n\n{text}"
+    raw = get_groq_response(prompt)
+    return re.sub(r"(?i)^here are.*?:", "", raw).strip()
