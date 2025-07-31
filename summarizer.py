@@ -152,6 +152,6 @@ Text:
     return get_groq_response(prompt)
 
 def generate_tags(text: str) -> str:
-    prompt = f"Generate 3 tags for this text (no numbers, no explanation):\n\n{text}"
+    prompt = f"Generate 3 tags for this text (no numbers, no explanation) seperate with commas:\n\n{text}"
     raw = get_groq_response(prompt)
     return re.sub(r"(?i)^here are.*?:", "", raw).strip()
